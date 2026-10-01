@@ -1,0 +1,11 @@
+{
+  "name": "exuar-partner-sim",
+  "private": true,
+  "version": "0.1.0",
+  "description": "A stand-in for a partner's backend: calls the Exuar partner API with signed requests.",
+  "type": "module",
+  "engines": { "node": ">=20.6" },
+  "scripts": {
+    "partner": "node --env-file=.env src/cli.mjs"
+  }
+}
