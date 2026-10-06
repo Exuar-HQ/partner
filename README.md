@@ -56,6 +56,18 @@ npm run partner -- dispute <cycleId> <ref> <ref> --reason "not received"
 npm run partner -- disputes --status OPEN
 ```
 
+## Repeats
+
+The same account and amount sent twice within 10 minutes, under two keys, is
+held until the partner acknowledges the first payout's outcome by webhook (or
+refused, with no webhook). Try it:
+
+```
+npm run partner -- payout rwf 50000 250788123456 Jean Mukamana
+npm run partner -- payout rwf 50000 250788123456 Jean Mukamana       # heldFor: the first
+npm run partner -- payout rwf 50000 250788123456 Jean Mukamana --allow-duplicate
+```
+
 ## Webhooks, locally
 
 ```

@@ -22,7 +22,9 @@ const [command, ...rest] = process.argv.slice(2)
 const flags = {}
 const args = []
 for (let i = 0; i < rest.length; i++) {
-  if (rest[i].startsWith('--')) {
+  if (rest[i] === '--allow-duplicate' || rest[i] === '--all') {
+    flags[rest[i].slice(2)] = true
+  } else if (rest[i].startsWith('--')) {
     flags[rest[i].slice(2)] = rest[i + 1] ?? true
     i++
   } else {
@@ -55,6 +57,7 @@ function instruction(currency, amount, a) {
     currency,
     amount: String(amount),
     beneficiary: beneficiary(currency, a),
+    ...(flags['allow-duplicate'] ? { allowDuplicate: true } : {}),
   }
 }
 
@@ -226,7 +229,7 @@ function usage() {
   banks                                          NGN banks a payout can go to
   payout rwf <amount> <msisdn> <full name>       e.g. payout rwf 50000 250788123456 Jean Mukamana
   payout ngn <amount> <account> <bank> <name>    e.g. payout ngn 20000 0123456789 GTBank Ada Okafor
-         [--key <idempotency key>] [--ref <your reference>]
+         [--key <idempotency key>] [--ref <your reference>] [--allow-duplicate]
   replay rwf <amount> <msisdn> <name>            send one instruction twice; must be one payout
   burst <n> rwf <amount> <msisdn> <name>         n payouts until a limit refuses
   status <ref>                                   a payout's status
