@@ -1,5 +1,6 @@
 import { randomBytes } from 'node:crypto'
-import { ExuarClient } from './exuar-client.mjs'
+import { createServer } from 'node:http'
+import { ExuarClient, verifyWebhook } from './exuar-client.mjs'
 
 /**
  * A partner's backend, simulated from the command line.
@@ -117,6 +118,106 @@ const commands = {
   async cycles() { print(await client.cycles()) },
 
   async statement() { if (!args[0]) return usage(); print(await client.statement(args[0])) },
+
+  async rates() { print(await client.rates()) },
+
+  async address() { print(await client.settlementAddress()) },
+
+  /** list [--status S] [--currency C] [--ref R] [--limit N] [--all] */
+  async list() {
+    const query = {
+      status: flags.status, currency: flags.currency, partnerReference: flags.ref,
+      from: flags.from, to: flags.to, limit: flags.limit,
+    }
+    let cursor
+    let page = 0
+    do {
+      const res = await client.listPayouts({ ...query, cursor })
+      if (!res.ok) return print(res)
+      page++
+      for (const p of res.data.payouts) {
+        console.log(`${p.createdAt}  ${p.status.padEnd(10)} ${p.currency} ${p.amount.padStart(12)}  ${p.ref}${p.partnerReference ? `  (${p.partnerReference})` : ''}`)
+      }
+      cursor = res.data.nextCursor ?? undefined
+    } while (cursor && flags.all)
+    if (cursor) console.log(`… more: run again with --all`)
+  },
+
+  /** batch <n> rwf <amount> <msisdn> <name…> — one request of n payouts. */
+  async batch() {
+    const [n, ccy, amount, ...a] = args
+    const currency = (ccy ?? '').toUpperCase()
+    if (!Number(n) || !['RWF', 'NGN'].includes(currency) || !amount) return usage()
+    const items = Array.from({ length: Number(n) }, () => ({ ...instruction(currency, amount, a), idempotencyKey: newKey() }))
+    const res = await client.instructBatch(items)
+    if (!res.ok) return print(res)
+    for (const r of res.data.results) {
+      console.log(`${String(r.index).padStart(3)}: ${r.result.padEnd(13)} ${r.payout?.ref ?? (r.error ? `${r.error.code ?? r.error.statusCode} — ${r.error.message}` : '')}`)
+    }
+    console.log(JSON.stringify(res.data.summary))
+  },
+
+  /** dispute <cycleId> <ref…> --reason "…" */
+  async dispute() {
+    const [cycleId, ...refs] = args
+    if (!cycleId || refs.length === 0) return usage()
+    print(await client.dispute(cycleId, refs, flags.reason ?? 'Beneficiary reports nothing received'))
+  },
+
+  async disputes() { print(await client.disputes(flags.status)) },
+
+  /** webhook register <url> [--events a,b] | show | remove | test | events [--status S] | replay <id> | listen [port] */
+  async webhook() {
+    const [sub, x] = args
+    if (sub === 'register') {
+      if (!x) return usage()
+      const res = await client.registerWebhook(x, flags.events ? String(flags.events).split(',') : undefined)
+      print(res)
+      if (res.ok) console.log(`\nPut the secret in .env as EXUAR_WEBHOOK_SECRET=${res.data.secret} — it is not shown again.`)
+      return
+    }
+    if (sub === 'show') return print(await client.webhook())
+    if (sub === 'remove') return print(await client.removeWebhook())
+    if (sub === 'test') return print(await client.testWebhook())
+    if (sub === 'events') return print(await client.webhookEvents(flags.status))
+    if (sub === 'replay') { if (!x) return usage(); return print(await client.replayWebhookEvent(x)) }
+    if (sub === 'listen') return listen(Number(x ?? 4000))
+    usage()
+  },
+}
+
+/**
+ * A partner's webhook endpoint, on this machine: verifies every delivery with
+ * EXUAR_WEBHOOK_SECRET, prints it, and answers 200 — or 401 for a bad signature.
+ * Register it with: webhook register http://localhost:4000/hooks
+ * (http and localhost are accepted only by a non-production API).
+ */
+function listen(port) {
+  const secret = process.env.EXUAR_WEBHOOK_SECRET
+  if (!secret) {
+    console.error('✗ EXUAR_WEBHOOK_SECRET is not set: register the webhook first and put its secret in .env.')
+    process.exitCode = 1
+    return
+  }
+  const seen = new Set()
+  createServer((req, res) => {
+    let raw = ''
+    req.on('data', (c) => (raw += c))
+    req.on('end', () => {
+      const valid = verifyWebhook(secret, req.headers, raw)
+      const id = req.headers['x-exuar-webhook-id']
+      res.statusCode = valid ? 200 : 401
+      res.end()
+      const t = new Date().toLocaleTimeString()
+      if (!valid) return console.log(`[${t}] ✗ rejected: bad or stale signature (${id ?? 'no id'})`)
+      const repeat = seen.has(id)
+      seen.add(id)
+      let body = {}
+      try { body = JSON.parse(raw) } catch { /* verified, so it is JSON */ }
+      const d = body.data ?? {}
+      console.log(`[${t}] ✓ ${body.type}${repeat ? ' (repeat — ignored)' : ''}  ${d.ref ?? d.cycleId ?? d.txHash ?? ''} ${d.status ?? d.usdtDue ?? ''}${d.failureReason ? ` (${d.failureReason})` : ''}`)
+    })
+  }).listen(port, () => console.log(`listening for Exuar webhooks on http://localhost:${port}/hooks`))
 }
 
 function usage() {
@@ -132,7 +233,17 @@ function usage() {
   watch <ref>                                    poll until paid, failed or cancelled
   cancel <ref>                                   withdraw a payout not yet picked up
   cycles                                         settlement cycles
-  statement <cycleId>                            a closed cycle's statement`)
+  statement <cycleId>                            a closed cycle's statement
+  rates                                          your rate per currency (USDT/RWF, USDT/NGN)
+  address                                        where to send USDT
+  list [--status S] [--currency C] [--ref R] [--all]   your payouts, newest first
+  batch <n> rwf <amount> <msisdn> <name>         one request of n payouts
+  dispute <cycleId> <ref…> [--reason "…"]        dispute unpaid payouts on a closed cycle
+  disputes [--status S]                          your disputes and their outcomes
+  webhook register <url> [--events a,b]          register (or replace) your endpoint
+  webhook show | remove | test                   see it, remove it, send a test event
+  webhook events [--status DEAD] | replay <id>   deliveries, and resending one
+  webhook listen [port]                          a local endpoint that verifies signatures`)
   process.exitCode = 1
 }
 

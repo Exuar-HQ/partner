@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from 'node:crypto'
+import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
 
 /**
  * A minimal client for the Exuar partner API — everything a partner's backend
@@ -113,4 +113,62 @@ export class ExuarClient {
   statement(cycleId) {
     return this.request('GET', `/v1/partner/cycles/${encodeURIComponent(cycleId)}/statement`)
   }
+
+  /** Your rate per currency, as USDT/RWF and USDT/NGN. */
+  rates() { return this.request('GET', '/v1/partner/rates') }
+
+  /** Your payouts, newest first. The query string is signed with the path. */
+  listPayouts(query = {}) {
+    const qs = new URLSearchParams(
+      Object.entries(query).filter(([, v]) => v !== undefined && v !== null && v !== ''),
+    ).toString()
+    return this.request('GET', `/v1/partner/payouts${qs ? `?${qs}` : ''}`)
+  }
+
+  /** Up to 100 instructions; a result per payout. */
+  instructBatch(payouts) { return this.request('POST', '/v1/partner/payouts/batch', { payouts }) }
+
+  /** Where to send USDT, and the addresses you may send from. */
+  settlementAddress() { return this.request('GET', '/v1/partner/settlement-address') }
+
+  /** Dispute payouts on a closed, unpaid cycle. */
+  dispute(cycleId, refs, reason) {
+    return this.request('POST', `/v1/partner/cycles/${encodeURIComponent(cycleId)}/disputes`, { refs, reason })
+  }
+
+  disputes(status) {
+    return this.request('GET', `/v1/partner/disputes${status ? `?status=${encodeURIComponent(status)}` : ''}`)
+  }
+
+  // ── Webhooks ────────────────────────────────────────────────────────────
+
+  registerWebhook(url, events) {
+    return this.request('POST', '/v1/partner/webhooks', events?.length ? { url, events } : { url })
+  }
+  webhook() { return this.request('GET', '/v1/partner/webhooks') }
+  removeWebhook() { return this.request('DELETE', '/v1/partner/webhooks') }
+  testWebhook() { return this.request('POST', '/v1/partner/webhooks/test') }
+  webhookEvents(status) {
+    return this.request('GET', `/v1/partner/webhooks/events${status ? `?status=${encodeURIComponent(status)}` : ''}`)
+  }
+  replayWebhookEvent(id) {
+    return this.request('POST', `/v1/partner/webhooks/events/${encodeURIComponent(id)}/replay`)
+  }
+}
+
+/**
+ * Check a webhook delivery from Exuar, as a partner's server must: HMAC-SHA256
+ * over `timestamp.id.rawBody` with the webhook secret, compared in constant
+ * time, and refused when older than five minutes.
+ */
+export function verifyWebhook(secret, headers, rawBody, now = Date.now()) {
+  const id = headers['x-exuar-webhook-id']
+  const timestamp = headers['x-exuar-webhook-timestamp']
+  const signature = headers['x-exuar-webhook-signature'] ?? ''
+  if (!id || !timestamp) return false
+  if (Math.abs(now / 1000 - Number(timestamp)) > 300) return false
+  const expected = createHmac('sha256', secret).update(`${timestamp}.${id}.${rawBody}`, 'utf8').digest('hex')
+  const a = Buffer.from(expected)
+  const b = Buffer.from(signature)
+  return a.length === b.length && timingSafeEqual(a, b)
 }

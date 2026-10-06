@@ -19,9 +19,9 @@ developers — `src/exuar-client.mjs` is the part they would copy.
    - **Security**: allowed IPs `127.0.0.1` and `::1` (calls to localhost arrive
      from one of these), plus a settlement address and a sending address — any
      TRC20-shaped address works locally, e.g. `TXYZopYRdj2D9XRtbG411XZZ3kM5VkAeBf`;
-   - **Activate**, then **Issue live key**. Copy the key id and secret — the
-     secret is shown once. (A sandbox key can read limits but cannot send
-     payouts yet.)
+   - **Issue sandbox key** to test everything with nobody paid; to send live
+     payouts, **Activate**, then **Issue live key**. Copy the key id and
+     secret — the secret is shown once.
 
 3. **Here**:
 
@@ -48,7 +48,32 @@ npm run partner -- watch <ref>                                     # until paid/
 npm run partner -- cancel <ref>
 npm run partner -- cycles
 npm run partner -- statement <cycleId>
+npm run partner -- rates                                           # USDT/RWF and USDT/NGN
+npm run partner -- address                                         # where to send USDT
+npm run partner -- list --status SUCCESSFUL --all                  # every payout, paged
+npm run partner -- batch 20 rwf 50000 250788123456 Jean Mukamana   # one request, 20 payouts
+npm run partner -- dispute <cycleId> <ref> <ref> --reason "not received"
+npm run partner -- disputes --status OPEN
 ```
+
+## Webhooks, locally
+
+```
+npm run partner -- webhook register http://localhost:4000/hooks   # prints the secret, once
+# put it in .env as EXUAR_WEBHOOK_SECRET=whsec_…
+npm run partner -- webhook listen 4000                            # in its own terminal
+npm run partner -- webhook test                                   # a webhook.test arrives
+npm run partner -- webhook events --status DEAD                   # deliveries that gave up
+npm run partner -- webhook replay <eventId>
+```
+
+`listen` verifies every delivery's signature exactly as a partner's server must
+(`verifyWebhook` in `src/exuar-client.mjs`), rejects a bad or stale one with
+`401`, and flags repeats. Plain `http` and `localhost` are accepted only by a
+non-production API; in production the endpoint must be public `https`.
+
+With a sandbox key, sandbox payouts send their events as they age —
+`payout.processing` after 20 s, the outcome after 30 s.
 
 A payout is `PENDING` until the daemon claims it. To see one through, run the
 daemon against the local API — or, with no daemon, claim and report it by hand
