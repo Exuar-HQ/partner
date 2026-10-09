@@ -109,3 +109,4 @@ Every refusal carries a stable `code`, for a partner's code to act on:
 
 A `401` is always "Invalid partner credentials", whatever the cause: check the
 clock (±60 s), the signed path (it includes `/api`), the key, and the IP.
+# partner
